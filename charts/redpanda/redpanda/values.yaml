@@ -74,14 +74,25 @@ image:
 # See https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
 
-# -- Enterprise license key (optional).
+# -- DEPRECATED Enterprise license key (optional).
 # For details,
 # see the [License documentation](https://docs.redpanda.com/docs/get-started/licenses/?platform=kubernetes#redpanda-enterprise-edition).
 license_key: ""
-# -- Secret name and secret key where the license key is stored.
+# -- DEPRECATED Secret name and secret key where the license key is stored.
 license_secret_ref: {}
   # secret_name: my-secret
   # secret_key: key-where-license-is-stored
+
+# -- Enterprise (optional)
+# For details,
+# see the [License documentation](https://docs.redpanda.com/docs/get-started/licenses/?platform=kubernetes#redpanda-enterprise-edition).
+enterprise:
+  # -- license (optional).
+  license: ""
+  # -- Secret name and key where the license key is stored.
+  licenseSecretRef: {}
+    # name: my-secret
+    # key: key-where-license-is-stored
 
 # -- Rack Awareness settings.
 # For details,
@@ -196,6 +207,12 @@ tls:
 # For details,
 # see the [Networking and Connectivity documentation](https://docs.redpanda.com/docs/manage/kubernetes/networking/networking-and-connectivity/).
 external:
+  # -- Service allows you to manage the creation of an external kubernetes service object
+  service:
+    # -- Enabled if set to false will not create the external service type
+    # You can still set your cluster with external access but not create the supporting service (NodePort/LoadBalander).
+    # Set this to false if you rather manage your own service.
+    enabled: true
   # -- Enable external access for each Service.
   # You can toggle external access for each listener in
   # `listeners.<service name>.external.<listener-name>.enabled`.
@@ -394,7 +411,7 @@ storage:
     annotations: {}
   #
   # -- Tiered Storage settings
-  # Requires `license_key` or `license_secret_ref`
+  # Requires `enterprise.licenseKey` or `enterprised.licenseSecretRef`
   # For details,
   # see the [Tiered Storage documentation](https://docs.redpanda.com/docs/manage/kubernetes/tiered-storage/).
   tieredConfig:
@@ -429,6 +446,10 @@ storage:
     # -- Required for ABS.
     # See the [property reference documentation](https://docs.redpanda.com/docs/reference/cluster-properties/#cloud_storage_azure_shared_key).
     cloud_storage_azure_shared_key: null
+    # -- Required for ABS hierarchical namespace
+    # Available starting from 23.2.8
+    # cloud_storage_azure_adls_endpoint: ""
+    # cloud_storage_azure_adls_port: ""
     # Available starting from 22.3.X
     # -- Required for AWS and GCS authentication with IAM roles.
     # See the [property reference documentation](https://docs.redpanda.com/docs/reference/cluster-properties/#cloud_storage_credentials_source).
@@ -473,6 +494,7 @@ post_install_job:
   #     memory: 1024Mi
   # labels: {}
   # annotations: {}
+  affinity: {}
 
 post_upgrade_job:
   enabled: true
@@ -497,6 +519,7 @@ post_upgrade_job:
   # extraEnvFrom:
   #   - secretRef:
   #       name: redpanda-aws-secrets
+  affinity: {}
 
 statefulset:
   # -- Number of Redpanda brokers (Redpanda Data recommends setting this to the number of worker nodes in the cluster)
@@ -584,6 +607,19 @@ statefulset:
       resources: {}
       securityContext: {}
       extraVolumeMounts: |-
+    controllers:
+      image:
+        tag: v23.2.8
+        repository: docker.redpanda.com/redpandadata/redpanda-operator
+      # You must enable, this feature is experimental, and so you must opt in
+      enabled: false
+      resources: {}
+      securityContext: {}
+      healthProbeAddress: ":8085"
+      metricsAddress: ":9082"
+      run:
+        - all
+      createRBAC: true
   initContainers:
     tuning:
       resources: {}
@@ -615,6 +651,19 @@ statefulset:
   # -- Additional flags to pass to redpanda,
   additionalRedpandaCmdFlags: []
 #    - --unsafe-bypass-fsync
+  # -- Termination grace period in seconds is time required to execute preStop hook
+  # which puts particular Redpanda Pod (process/container) into maintenance mode.
+  # Before settle down on particular value please put Redpanda under load and perform
+  # rolling upgrade or rolling restart. That value needs to accommodate two processes:
+  # * preStop hook needs to put Redpanda into maintenance mode
+  # * after preStop hook Redpanda needs to handle gracefully SIGTERM signal
+  #
+  # Both processes are executed sequentially where preStop hook has hard deadline in the
+  # middle of terminationGracePeriodSeconds.
+  #
+  # REF:
+  # https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/#hook-handler-execution
+  # https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination
   terminationGracePeriodSeconds: 90
   ## Additional Volumes that you mount
   extraVolumes: |-
@@ -919,7 +968,19 @@ config:
     # wait_for_leader_timeout_ms: 5000ms                           # Timeout (ms) to wait for leadership in metadata cache
   # -- Node (broker) properties.
   # See the [property reference documentation](https://docs.redpanda.com/docs/reference/node-properties/).
-  node: {}
+  node:
+    # -- Crash loop limit
+    # A limit on the number of consecutive times a broker can crash within one hour before its crash-tracking logic is reset.
+    # This limit prevents a broker from getting stuck in an infinite cycle of crashes.
+    # User can disable this crash loop limit check by the following action:
+    #
+    # * One hour elapses since the last crash
+    # * The node configuration file, redpanda.yaml, is updated via config.cluster or config.node or config.tunable objects
+    # * The startup_log file in the node’s data_directory is manually deleted
+    #
+    # Default to 5
+    # REF: https://docs.redpanda.com/current/reference/node-properties/#crash_loop_limit
+    crash_loop_limit: 5
     # node_id:                                                     # Unique ID identifying a node in the cluster
     # data_directory:                                              # Place where redpanda will keep the data
     # admin_api_doc_dir: /usr/share/redpanda/admin-api-doc         # Admin API doc directory
